@@ -44,10 +44,41 @@ function handleAutoStartChange() {
 
 // Centralized list of hosts allowed to navigate within the Electron window
 // Used by both will-navigate handler and preload click handler
-const allowedHosts = [
-  'gemini.google.com',
-  'accounts.google.com',
-];
+const allowedNavigation = {
+  hosts: [
+    'gemini.google.com',
+    'accounts.google.com',
+  ],
+  // Enterprise IdP domains (matched as any subdomain) so SSO logins finish in-app.
+  enterpriseSuffixes: [
+    '.okta.com',
+    '.okta-emea.com',
+    '.oktapreview.com',
+    '.microsoftonline.com',
+    '.b2clogin.com',
+    '.pingone.com',
+    '.onelogin.com',
+    '.auth0.com',
+    '.jumpcloud.com',
+  ],
+  // MFA providers a login may redirect through mid-flow.
+  mfaSuffixes: [
+    '.duosecurity.com',
+    '.securid.com',
+  ],
+  // SSO Assertion Consumer Service (ACS); must load in-app to complete SAML login.
+  ssoHosts: [
+    'www.google.com',
+  ],
+};
+
+function isAllowedHost(hostname) {
+  if (!hostname) return false;
+  if (allowedNavigation.hosts.includes(hostname)) return true;
+  if (allowedNavigation.ssoHosts.includes(hostname)) return true;
+  const suffixes = [...allowedNavigation.enterpriseSuffixes, ...allowedNavigation.mfaSuffixes];
+  return suffixes.some((suffix) => hostname.endsWith(suffix));
+}
 
 // IPC listeners (registered once, outside createWindow to avoid leaks)
 ipcMain.on('zoom-in', () => {
@@ -85,7 +116,7 @@ ipcMain.on('log-message', (event, message) => {
 
 // Return allowed hosts list to preload script
 ipcMain.handle('get-allowed-hosts', () => {
-  return allowedHosts;
+  return allowedNavigation;
 });
 
 // Open links with default browser
@@ -289,9 +320,6 @@ function createWindow () {
     }
   });
 
-  // Use centralized allowedHosts (convert to Set for efficient lookup)
-  const allowedHostsSet = new Set(allowedHosts);
-
   // Intercept navigation and only allow app + auth hosts in-app
   win.webContents.on('will-navigate', (event, url) => {
     // Allow file:// protocol only for app-internal files
@@ -335,7 +363,7 @@ function createWindow () {
       
       // Only handle http(s) protocols - prevent potentially unsafe protocols
       if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
-        if (!allowedHostsSet.has(targetHostname)) {
+        if (!isAllowedHost(targetHostname)) {
           console.log('will-navigate external: ', url);
           event.preventDefault();
           shell.openExternal(url);

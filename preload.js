@@ -1,7 +1,32 @@
 const { ipcRenderer } = require('electron');
 
 // Default fallback hosts if IPC fetch fails (must match main process allowedHosts)
-const DEFAULT_ALLOWED_HOSTS = ['gemini.google.com', 'accounts.google.com'];
+const DEFAULT_ALLOWED_NAVIGATION = {
+    hosts: ['gemini.google.com', 'accounts.google.com'],
+    enterpriseSuffixes: [
+        '.okta.com', '.okta-emea.com', '.oktapreview.com',
+        '.microsoftonline.com', '.b2clogin.com',
+        '.pingone.com', '.onelogin.com', '.auth0.com', '.jumpcloud.com',
+    ],
+    mfaSuffixes: ['.duosecurity.com', '.securid.com'],
+    ssoHosts: ['www.google.com'],
+};
+
+function makeIsAllowedHost(allow) {
+    const hostSet = new Set([
+        ...((allow && allow.hosts) || []),
+        ...((allow && allow.ssoHosts) || []),
+    ]);
+    const suffixList = [
+        ...((allow && allow.enterpriseSuffixes) || []),
+        ...((allow && allow.mfaSuffixes) || []),
+    ];
+    return (hostname) => {
+        if (!hostname) return false;
+        if (hostSet.has(hostname)) return true;
+        return suffixList.some((suffix) => hostname.endsWith(suffix));
+    };
+}
 
 // Network status detection
 function updateNetworkStatus() {
@@ -25,15 +50,15 @@ window.addEventListener('DOMContentLoaded', async () => {
         updateNetworkStatus();
     }
 
-    // Fetch allowed hosts from main process (centralized source of truth)
-    let allowedHosts;
+    // Fetch allow-list from main process (centralized source of truth)
+    let isAllowedHost;
     try {
-        const allowedHostsArray = await ipcRenderer.invoke('get-allowed-hosts');
-        allowedHosts = new Set(allowedHostsArray);
+        const allow = await ipcRenderer.invoke('get-allowed-hosts');
+        isAllowedHost = makeIsAllowedHost(allow);
     } catch (e) {
         console.error('Failed to fetch allowed hosts from main process:', e);
-        // Fallback to default hosts if IPC fails
-        allowedHosts = new Set(DEFAULT_ALLOWED_HOSTS);
+        // Fallback to defaults if IPC fails
+        isAllowedHost = makeIsAllowedHost(DEFAULT_ALLOWED_NAVIGATION);
     }
 
     // Listen for click events and open non-allowed links externally
@@ -48,7 +73,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             try {
                 // Use hostname (not host) to exclude port from comparison
                 const hostname = new URL(link.href).hostname;
-                if (allowedHosts.has(hostname)) {
+                if (isAllowedHost(hostname)) {
                     return; // Allow app + auth links to navigate in-app
                 }
             } catch (e) {
