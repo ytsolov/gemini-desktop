@@ -10,6 +10,8 @@ const DEFAULT_ALLOWED_NAVIGATION = {
     ],
     mfaSuffixes: ['.duosecurity.com', '.securid.com'],
     ssoHosts: ['www.google.com'],
+    downloadSuffixes: ['.usercontent.google.com'],
+    viewerSuffixes: ['.googleusercontent.com'],
 };
 
 function makeIsAllowedHost(allow) {
@@ -20,6 +22,8 @@ function makeIsAllowedHost(allow) {
     const suffixList = [
         ...((allow && allow.enterpriseSuffixes) || []),
         ...((allow && allow.mfaSuffixes) || []),
+        ...((allow && allow.downloadSuffixes) || []),
+        ...((allow && allow.viewerSuffixes) || []),
     ];
     return (hostname) => {
         if (!hostname) return false;

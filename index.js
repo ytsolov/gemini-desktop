@@ -70,14 +70,41 @@ const allowedNavigation = {
   ssoHosts: [
     'www.google.com',
   ],
+  // Google content delivery; downloads must use the app session to preserve auth cookies.
+  downloadSuffixes: [
+    '.usercontent.google.com',
+  ],
+  // Google viewer/print pages; must open in a new in-app window to preserve auth cookies.
+  viewerSuffixes: [
+    '.googleusercontent.com',
+  ],
 };
 
 function isAllowedHost(hostname) {
   if (!hostname) return false;
   if (allowedNavigation.hosts.includes(hostname)) return true;
   if (allowedNavigation.ssoHosts.includes(hostname)) return true;
-  const suffixes = [...allowedNavigation.enterpriseSuffixes, ...allowedNavigation.mfaSuffixes];
+  const suffixes = [
+    ...allowedNavigation.enterpriseSuffixes,
+    ...allowedNavigation.mfaSuffixes,
+    ...allowedNavigation.downloadSuffixes,
+  ];
   return suffixes.some((suffix) => hostname.endsWith(suffix));
+}
+
+function openGoogleViewerWindow(url) {
+  console.log('opening Google viewer in new in-app window', url);
+  const viewerWin = new BrowserWindow({
+    width: 900,
+    height: 700,
+    icon: icon,
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+    }
+  });
+  viewerWin.loadURL(url);
+  viewerWin.removeMenu();
 }
 
 // IPC listeners (registered once, outside createWindow to avoid leaks)
@@ -147,6 +174,17 @@ ipcMain.on('open-external-link', (event, url) => {
     console.warn(
       `open-external-link: blocked url with disallowed protocol: ${parsedUrl.protocol}`
     );
+    return;
+  }
+
+  if (allowedNavigation.downloadSuffixes.some((s) => parsedUrl.hostname.endsWith(s))) {
+    console.log('open-external-link: routing download through app session', trimmedUrl);
+    if (win && !win.isDestroyed()) win.webContents.downloadURL(trimmedUrl);
+    return;
+  }
+
+  if (allowedNavigation.viewerSuffixes.some((s) => parsedUrl.hostname.endsWith(s))) {
+    openGoogleViewerWindow(trimmedUrl);
     return;
   }
 
@@ -363,7 +401,10 @@ function createWindow () {
       
       // Only handle http(s) protocols - prevent potentially unsafe protocols
       if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
-        if (!isAllowedHost(targetHostname)) {
+        if (allowedNavigation.viewerSuffixes.some((s) => targetHostname.endsWith(s))) {
+          event.preventDefault();
+          openGoogleViewerWindow(url);
+        } else if (!isAllowedHost(targetHostname)) {
           console.log('will-navigate external: ', url);
           event.preventDefault();
           shell.openExternal(url);
@@ -409,9 +450,16 @@ function createWindow () {
       return { action: 'deny' };
     }
 
-    // Open other http(s) links externally
+    // Open other http(s) links externally, except Google content which needs app session.
     if (protocol === 'https:' || protocol === 'http:') {
-      shell.openExternal(url);
+      if (allowedNavigation.downloadSuffixes.some((s) => parsedUrl.hostname.endsWith(s))) {
+        console.log('windowOpenHandler: routing download through app session', url);
+        if (win && !win.isDestroyed()) win.webContents.downloadURL(url);
+      } else if (allowedNavigation.viewerSuffixes.some((s) => parsedUrl.hostname.endsWith(s))) {
+        openGoogleViewerWindow(url);
+      } else {
+        shell.openExternal(url);
+      }
     } else {
       // Block non-http(s) schemes (file:, javascript:, custom protocols, etc.)
       console.warn('windowOpenHandler: blocked non-http(s) URL', url);
