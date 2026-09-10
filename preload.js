@@ -1,35 +1,17 @@
 const { ipcRenderer } = require('electron');
 
-// Default fallback hosts if IPC fetch fails (must match main process allowedHosts)
-const DEFAULT_ALLOWED_NAVIGATION = {
-    hosts: ['gemini.google.com', 'accounts.google.com'],
-    enterpriseSuffixes: [
-        '.okta.com', '.okta-emea.com', '.oktapreview.com',
-        '.microsoftonline.com', '.b2clogin.com',
-        '.pingone.com', '.onelogin.com', '.auth0.com', '.jumpcloud.com',
-    ],
-    mfaSuffixes: ['.duosecurity.com', '.securid.com'],
-    ssoHosts: ['www.google.com'],
-    downloadSuffixes: ['.usercontent.google.com'],
-    viewerSuffixes: ['.googleusercontent.com'],
-};
+// Pre-filter for link clicks; the main process guards do the enforcing.
+let hostRules = null;
+ipcRenderer.invoke('get-allowed-hosts')
+    .then((rules) => { hostRules = rules; })
+    .catch((e) => {
+        console.warn('preload: could not fetch allowed hosts, deferring to main', e);
+    });
 
-function makeIsAllowedHost(allow) {
-    const hostSet = new Set([
-        ...((allow && allow.hosts) || []),
-        ...((allow && allow.ssoHosts) || []),
-    ]);
-    const suffixList = [
-        ...((allow && allow.enterpriseSuffixes) || []),
-        ...((allow && allow.mfaSuffixes) || []),
-        ...((allow && allow.downloadSuffixes) || []),
-        ...((allow && allow.viewerSuffixes) || []),
-    ];
-    return (hostname) => {
-        if (!hostname) return false;
-        if (hostSet.has(hostname)) return true;
-        return suffixList.some((suffix) => hostname.endsWith(suffix));
-    };
+function isAllowedHost(hostname) {
+    if (!hostRules) return true; // not loaded yet: let the main process decide
+    return hostRules.hosts.includes(hostname)
+        || hostRules.suffixes.some((suffix) => hostname.endsWith(suffix));
 }
 
 // Network status detection
@@ -41,7 +23,7 @@ window.addEventListener('online', updateNetworkStatus);
 window.addEventListener('offline', updateNetworkStatus);
 
 // Listen for DOMContentLoaded event
-window.addEventListener('DOMContentLoaded', async () => {
+window.addEventListener('DOMContentLoaded', () => {
     // Wire up retry button on offline page
     const retryBtn = document.getElementById('retry-btn');
     if (retryBtn) {
@@ -52,17 +34,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         // Only send initial network status if NOT on offline page
         // to avoid triggering reload loops
         updateNetworkStatus();
-    }
-
-    // Fetch allow-list from main process (centralized source of truth)
-    let isAllowedHost;
-    try {
-        const allow = await ipcRenderer.invoke('get-allowed-hosts');
-        isAllowedHost = makeIsAllowedHost(allow);
-    } catch (e) {
-        console.error('Failed to fetch allowed hosts from main process:', e);
-        // Fallback to defaults if IPC fails
-        isAllowedHost = makeIsAllowedHost(DEFAULT_ALLOWED_NAVIGATION);
     }
 
     // Listen for click events and open non-allowed links externally
